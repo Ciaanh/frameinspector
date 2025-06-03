@@ -11,28 +11,32 @@ end
 
 -- Check if a frame is one of our overlay frames
 local function IsOurOverlayFrame(frame)
-    if not frame then return false end
-    
+    if not frame then
+        return false
+    end
+
     -- Check if it's one of our overlay frames
     for i = 1, #overlayFrames do
         if overlayFrames[i] == frame then
             return true
         end
     end
-    
+
     -- Check if it's our tooltip
     if tooltip and frame == tooltip then
         return true
     end
-    
+
     -- Check if it's any child texture/region of our overlay frames
     for i = 1, #overlayFrames do
         if overlayFrames[i] then
             local overlay = overlayFrames[i]
             -- Check if it's a child region (borders, highlights, anchor points)
-            if frame == overlay.highlight or frame == overlay.topBorder or 
-               frame == overlay.bottomBorder or frame == overlay.leftBorder or 
-               frame == overlay.rightBorder then
+            if
+                frame == overlay.highlight or frame == overlay.topBorder or frame == overlay.bottomBorder or
+                    frame == overlay.leftBorder or
+                    frame == overlay.rightBorder
+             then
                 return true
             end
             -- Check anchor point textures
@@ -45,13 +49,13 @@ local function IsOurOverlayFrame(frame)
             end
         end
     end
-    
+
     -- Check by name pattern (as backup)
     local name = frame:GetName()
     if name and (name:match("^FrameInspectorOverlay%d+$") or name == "FrameInspectorTooltip") then
         return true
     end
-    
+
     return false
 end
 
@@ -351,7 +355,8 @@ local function GetFrameInteractionInfo(frame)
     )
     if success and result then
         table.insert(interactions, "Keyboard")
-    end    return interactions
+    end
+    return interactions
 end
 
 -- Use Blizzard's frame detection method with fallback to GetMouseFoci
@@ -360,26 +365,36 @@ local function GetFramesUsingBlizzardMethod()
     if FrameStackTooltip and FrameStackTooltip.SetFrameStack then
         -- Use Blizzard's existing FrameStackTooltip
         local highlightFrame = FrameStackTooltip:SetFrameStack(false, false) -- returns the top frame
-        
+
         if highlightFrame and CanAccessObject(highlightFrame) then
             -- Build frame stack from highlight frame
             local frames = {}
             local current = highlightFrame
             local depth = 0
-            local maxDepth = 10            while current and depth < maxDepth do
+            local maxDepth = 10
+            while current and depth < maxDepth do
                 if CanAccessObject(current) and not IsOurOverlayFrame(current) then
                     table.insert(frames, current)
                 end
-                
-                local success, parent = pcall(function() return current:GetParent() end)
+
+                local success, parent =
+                    pcall(
+                    function()
+                        return current:GetParent()
+                    end
+                )
                 if success and parent and parent ~= current then
+                    -- Skip UIParent to avoid showing the root parent in frame stacks
+                    if parent == UIParent then
+                        break
+                    end
                     current = parent
                     depth = depth + 1
                 else
                     break
                 end
             end
-            
+
             -- Filter out our own frames from the result
             local filteredFrames = {}
             for _, frame in ipairs(frames) do
@@ -387,21 +402,20 @@ local function GetFramesUsingBlizzardMethod()
                     table.insert(filteredFrames, frame)
                 end
             end
-            
+
             return filteredFrames
         end
     end
-      -- Fallback to GetMouseFoci if Blizzard method is not available
+    -- Fallback to GetMouseFoci if Blizzard method is not available
     local frames = GetMouseFoci and GetMouseFoci() or {}
-    
-    -- Filter frames for security and exclude our own frames
+    -- Filter frames for security and exclude our own frames and UIParent
     local accessibleFrames = {}
     for _, frame in ipairs(frames) do
-        if CanAccessObject(frame) and not IsOurOverlayFrame(frame) then
+        if CanAccessObject(frame) and not IsOurOverlayFrame(frame) and frame ~= UIParent then
             table.insert(accessibleFrames, frame)
         end
     end
-    
+
     return accessibleFrames
 end
 
@@ -519,7 +533,8 @@ local function HighlightAnchors(overlay, frame)
     end
 
     if frame.GetNumPoints then
-        for i = 1, frame:GetNumPoints() do            local point, relativeTo, relativePoint = frame:GetPoint(i)
+        for i = 1, frame:GetNumPoints() do
+            local point, relativeTo, relativePoint = frame:GetPoint(i)
             if relativeTo and relativeTo ~= overlay and relativeTo ~= frame and not IsOurOverlayFrame(relativeTo) then
                 if not overlay.anchorPoints[i] then
                     overlay.anchorPoints[i] = overlay:CreateTexture(nil, "OVERLAY")
@@ -705,6 +720,10 @@ local function GetFrameStack(frame)
             end
         )
         if success and result then
+            -- Skip UIParent to avoid showing the root parent in frame stacks
+            if result == UIParent then
+                break
+            end
             current = result
         else
             break
@@ -723,20 +742,90 @@ end
 
 -- Enhanced frame detection using Blizzard-style approach
 
-
 -- Track the currently highlighted frames to prevent unnecessary updates
 local currentlyHighlightedFrames = {}
 local currentTooltipFrame = nil
 
--- Update overlay position and tooltip
+-- Performance optimization variables
+local lastUpdateTime = 0
+local UPDATE_INTERVAL = 0.05 -- 20 FPS instead of every frame
+local lastMouseX, lastMouseY = 0, 0
+local MOUSE_MOVE_THRESHOLD = 5 -- pixels
+
+-- Frame stack caching
+local frameStackCache = {}
+local lastCacheClear = 0
+local CACHE_CLEAR_INTERVAL = 5.0 -- Clear old cache entries every 5 seconds
+
+-- Add frame stack caching with performance optimization
+local function GetCachedFrameStack(frame)
+    local frameKey = tostring(frame)
+    if not frameStackCache[frameKey] then
+        frameStackCache[frameKey] = {
+            stack = GetFrameStack(frame),
+            timestamp = GetTime()
+        }
+    end
+
+    -- Cache for 1 second before rebuilding
+    local cache = frameStackCache[frameKey]
+    if GetTime() - cache.timestamp > 1.0 then
+        cache.stack = GetFrameStack(frame)
+        cache.timestamp = GetTime()
+    end
+
+    return cache.stack
+end
+
+-- Clear cache periodically to prevent memory leaks
+local function ClearOldCache()
+    local currentTime = GetTime()
+    for key, cache in pairs(frameStackCache) do
+        if currentTime - cache.timestamp > 5.0 then
+            frameStackCache[key] = nil
+        end
+    end
+    lastCacheClear = currentTime
+end
+
+-- Update overlay position and tooltip (optimized with throttling)
 local function UpdateInspector()
     if not isActive then
         return
     end
-    
+
+    -- Throttle updates to ~20 FPS
+    local currentTime = GetTime()
+    if currentTime - lastUpdateTime < UPDATE_INTERVAL then
+        return
+    end
+
+    -- Only update if mouse moved significantly
+    local mouseX, mouseY = GetCursorPosition()
+    local scale = UIParent:GetEffectiveScale()
+    mouseX, mouseY = mouseX / scale, mouseY / scale
+
+    local mouseDelta = math.sqrt((mouseX - lastMouseX) ^ 2 + (mouseY - lastMouseY) ^ 2)
+    if mouseDelta < MOUSE_MOVE_THRESHOLD and #currentlyHighlightedFrames > 0 then
+        -- Just update tooltip position without full processing
+        if tooltip and tooltip:IsShown() then
+            tooltip:ClearAllPoints()
+            tooltip:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", mouseX + 15, mouseY + 15)
+        end
+        return
+    end
+
+    lastUpdateTime = currentTime
+    lastMouseX, lastMouseY = mouseX, mouseY
+
+    -- Clear old cache entries periodically
+    if currentTime - lastCacheClear > CACHE_CLEAR_INTERVAL then
+        ClearOldCache()
+    end
+
     -- Use Blizzard's frame detection method instead of GetMouseFoci
     local frames = GetFramesUsingBlizzardMethod()
-      -- Additional safety filter to ensure no overlay frames slip through
+    -- Additional safety filter to ensure no overlay frames slip through
     if frames then
         local safeFrames = {}
         for _, frame in ipairs(frames) do
@@ -746,7 +835,7 @@ local function UpdateInspector()
         end
         frames = safeFrames
     end
-    
+
     if not frames or #frames == 0 or (frames[1] and frames[1] == WorldFrame) then
         -- Only hide if we were previously showing something
         if #currentlyHighlightedFrames > 0 then
@@ -780,55 +869,52 @@ local function UpdateInspector()
     end
 
     -- Only update overlays if the frame stack has changed
-    if framesChanged then        -- Hide overlays that are no longer needed
-        local layersToShow = math.min(#frames, maxLayers)
+    local layersToShow = math.min(#frames, maxLayers)
+    if framesChanged then
+        -- Hide overlays that are no longer needed
         for i = layersToShow + 1, #overlayFrames do
             if overlayFrames[i]:IsShown() then
                 overlayFrames[i]:Hide()
             end
         end
-        
-        -- Update overlays for current frames
+        -- Show overlays for current frames if needed
         for i = 1, layersToShow do
             local frame = frames[i]
             local overlay = overlayFrames[i]
-
             if frame and overlay and frame ~= overlay and not IsOurOverlayFrame(frame) then
-                -- Only update if the frame has changed for this layer
-                if currentlyHighlightedFrames[i] ~= frame then
-                    overlay:ClearAllPoints()
-                    overlay:SetAllPoints(frame)
-                    
-                    -- Highlight anchor points for the top frame
-                    if i == 1 then
-                        HighlightAnchors(overlay, frame)
-                    end
-                end
-                
                 if not overlay:IsShown() then
                     overlay:Show()
                 end
-            elseif overlay and overlay:IsShown() then
-                -- Hide overlay if frame is invalid/our own frame
-                overlay:Hide()
             end
-        end        -- Update the tracking table
+        end
+        -- Update the tracking table ONLY when frames have changed
         currentlyHighlightedFrames = {}
         for i = 1, #frames do
             currentlyHighlightedFrames[i] = frames[i]
         end
     end
-    
+    -- Always update overlay positions and anchor highlights for visible overlays
+    for i = 1, layersToShow do
+        local frame = frames[i]
+        local overlay = overlayFrames[i]
+        if frame and overlay and frame ~= overlay and not IsOurOverlayFrame(frame) and overlay:IsShown() then
+            overlay:ClearAllPoints()
+            overlay:SetAllPoints(frame)
+            if i == 1 then
+                HighlightAnchors(overlay, frame)
+            end
+        end
+    end
+
     -- Use Blizzard's frame highlighting system for the top frame (only if frame changed)
     local topFrame = frames[1]
     if topFrame and framesChanged and FrameStackHighlight and FrameStackHighlight.HighlightFrame then
         FrameStackHighlight:HighlightFrame(topFrame, true) -- show anchors = true
     end
-
     -- Update tooltip only if the top frame has changed or frames changed
     if topFrame and (framesChanged or currentTooltipFrame ~= topFrame) then
         local frameInfo = GetFrameInfo(topFrame)
-        local frameStack = GetFrameStack(topFrame)
+        local frameStack = GetCachedFrameStack(topFrame)
         local formattedLayers = GetFormattedFrameLayers(frames)
 
         -- Update tooltip
@@ -840,8 +926,12 @@ local function UpdateInspector()
         tooltip:ClearAllPoints()
         local x, y = GetCursorPosition()
         local scale = UIParent:GetEffectiveScale()
-        tooltip:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", (x / scale) + 15, (y / scale) + 15)        -- Enhanced tooltip text with more detailed information
-        local detectionMethod = (FrameStackTooltip and FrameStackTooltip.SetFrameStack) and "Blizzard SetFrameStack" or "GetMouseFoci Fallback"
+        tooltip:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", (x / scale) + 15, (y / scale) + 15)
+
+        -- Enhanced tooltip text with more detailed information
+        local detectionMethod =
+            (FrameStackTooltip and FrameStackTooltip.SetFrameStack) and "Blizzard SetFrameStack" or
+            "GetMouseFoci Fallback"
         local tooltipText = "|cffffff00Frame Inspector v0.3 (" .. detectionMethod .. ")|r\n\n"
         tooltipText = tooltipText .. "|cffff8000Layers Found: " .. #frames .. "|r\n\n"
         tooltipText = tooltipText .. "|cffff0000[TOP LAYER]|r\n"
@@ -918,7 +1008,7 @@ local function UpdateInspector()
             tooltip.text:SetText(tooltipText)
             tooltip:Show()
         end
-        
+
         -- Track the current tooltip frame
         currentTooltipFrame = topFrame
     elseif topFrame then
@@ -952,7 +1042,7 @@ local function DeactivateInspector()
 
     -- Stop update timer
     FrameInspector:SetScript("OnUpdate", nil)
-      -- Reset tracking state
+    -- Reset tracking state
     currentlyHighlightedFrames = {}
     currentTooltipFrame = nil
 
