@@ -1,8 +1,8 @@
 ## Interface: 110105
 ## Title: FrameInspector
-## Notes: Frame stack inspector with enhanced features inspired by Blizzard's debug tools
+## Notes: Frame stack inspector with enhanced features and Blizzard SetFrameStack integration
 ## Author: Ciaanh
-## Version: 0.2
+## Version: 0.3
 ## OptionalDeps: Blizzard_DebugTools
 
 FrameInspector.lua

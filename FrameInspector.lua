@@ -9,6 +9,52 @@ local function CanAccessObject(obj)
     return issecure() or not obj:IsForbidden()
 end
 
+-- Check if a frame is one of our overlay frames
+local function IsOurOverlayFrame(frame)
+    if not frame then return false end
+    
+    -- Check if it's one of our overlay frames
+    for i = 1, #overlayFrames do
+        if overlayFrames[i] == frame then
+            return true
+        end
+    end
+    
+    -- Check if it's our tooltip
+    if tooltip and frame == tooltip then
+        return true
+    end
+    
+    -- Check if it's any child texture/region of our overlay frames
+    for i = 1, #overlayFrames do
+        if overlayFrames[i] then
+            local overlay = overlayFrames[i]
+            -- Check if it's a child region (borders, highlights, anchor points)
+            if frame == overlay.highlight or frame == overlay.topBorder or 
+               frame == overlay.bottomBorder or frame == overlay.leftBorder or 
+               frame == overlay.rightBorder then
+                return true
+            end
+            -- Check anchor point textures
+            if overlay.anchorPoints then
+                for _, anchorPoint in ipairs(overlay.anchorPoints) do
+                    if frame == anchorPoint then
+                        return true
+                    end
+                end
+            end
+        end
+    end
+    
+    -- Check by name pattern (as backup)
+    local name = frame:GetName()
+    if name and (name:match("^FrameInspectorOverlay%d+$") or name == "FrameInspectorTooltip") then
+        return true
+    end
+    
+    return false
+end
+
 -- Frame stack display configuration
 local stackDisplayConfig = {
     maxDepth = 15, -- Maximum depth to show in hierarchy
@@ -305,9 +351,58 @@ local function GetFrameInteractionInfo(frame)
     )
     if success and result then
         table.insert(interactions, "Keyboard")
-    end
+    end    return interactions
+end
 
-    return interactions
+-- Use Blizzard's frame detection method with fallback to GetMouseFoci
+local function GetFramesUsingBlizzardMethod()
+    -- Try to use Blizzard's frame stack detection if available
+    if FrameStackTooltip and FrameStackTooltip.SetFrameStack then
+        -- Use Blizzard's existing FrameStackTooltip
+        local highlightFrame = FrameStackTooltip:SetFrameStack(false, false) -- returns the top frame
+        
+        if highlightFrame and CanAccessObject(highlightFrame) then
+            -- Build frame stack from highlight frame
+            local frames = {}
+            local current = highlightFrame
+            local depth = 0
+            local maxDepth = 10            while current and depth < maxDepth do
+                if CanAccessObject(current) and not IsOurOverlayFrame(current) then
+                    table.insert(frames, current)
+                end
+                
+                local success, parent = pcall(function() return current:GetParent() end)
+                if success and parent and parent ~= current then
+                    current = parent
+                    depth = depth + 1
+                else
+                    break
+                end
+            end
+            
+            -- Filter out our own frames from the result
+            local filteredFrames = {}
+            for _, frame in ipairs(frames) do
+                if not IsOurOverlayFrame(frame) then
+                    table.insert(filteredFrames, frame)
+                end
+            end
+            
+            return filteredFrames
+        end
+    end
+      -- Fallback to GetMouseFoci if Blizzard method is not available
+    local frames = GetMouseFoci and GetMouseFoci() or {}
+    
+    -- Filter frames for security and exclude our own frames
+    local accessibleFrames = {}
+    for _, frame in ipairs(frames) do
+        if CanAccessObject(frame) and not IsOurOverlayFrame(frame) then
+            table.insert(accessibleFrames, frame)
+        end
+    end
+    
+    return accessibleFrames
 end
 
 -- Advanced inspection function for integration with Blizzard's Table Inspector
@@ -316,7 +411,8 @@ local function HandleAdvancedInspection()
         return
     end
 
-    local frames = GetMouseFoci and GetMouseFoci() or {}
+    -- Use Blizzard's frame detection method instead of GetMouseFoci
+    local frames = GetFramesUsingBlizzardMethod()
     if frames and #frames > 0 and frames[1] ~= WorldFrame then
         local topFrame = frames[1]
 
@@ -423,9 +519,8 @@ local function HighlightAnchors(overlay, frame)
     end
 
     if frame.GetNumPoints then
-        for i = 1, frame:GetNumPoints() do
-            local point, relativeTo, relativePoint = frame:GetPoint(i)
-            if relativeTo then
+        for i = 1, frame:GetNumPoints() do            local point, relativeTo, relativePoint = frame:GetPoint(i)
+            if relativeTo and relativeTo ~= overlay and relativeTo ~= frame and not IsOurOverlayFrame(relativeTo) then
                 if not overlay.anchorPoints[i] then
                     overlay.anchorPoints[i] = overlay:CreateTexture(nil, "OVERLAY")
                     overlay.anchorPoints[i]:SetSize(4, 4)
@@ -626,156 +721,214 @@ local function GetFrameStack(frame)
     return table.concat(stack, "\n")
 end
 
+-- Enhanced frame detection using Blizzard-style approach
+
+
+-- Track the currently highlighted frames to prevent unnecessary updates
+local currentlyHighlightedFrames = {}
+local currentTooltipFrame = nil
+
 -- Update overlay position and tooltip
 local function UpdateInspector()
     if not isActive then
         return
     end
-    local frames = GetMouseFoci and GetMouseFoci() or {}
-
-    -- Filter frames for security - only show accessible frames
-    local accessibleFrames = {}
-    for _, frame in ipairs(frames) do
-        if CanAccessObject(frame) then
-            table.insert(accessibleFrames, frame)
-        end
-    end
-    frames = accessibleFrames
-
-    if not frames or #frames == 0 or frames[1] == WorldFrame then
-        -- Hide all overlays
-        for i = 1, #overlayFrames do
-            overlayFrames[i]:Hide()
-        end
-        if tooltip then
-            tooltip:Hide()
-        end
-        return
-    end
-
-    -- Hide all overlays first
-    local overlaysHidden = 0
-    for i = 1, #overlayFrames do
-        if overlayFrames[i]:IsShown() then
-            overlaysHidden = overlaysHidden + 1
-        end
-        overlayFrames[i]:Hide()
-    end
-
-    -- Show overlays for up to maxLayers frames
-    local layersToShow = math.min(#frames, maxLayers)
-
-    for i = 1, layersToShow do
-        local frame = frames[i]
-        local overlay = overlayFrames[i]
-
-        if frame and overlay then
-            overlay:ClearAllPoints()
-            overlay:SetAllPoints(frame)
-
-            -- Highlight anchor points for the top frame
-            if i == 1 then
-                HighlightAnchors(overlay, frame)
+    
+    -- Use Blizzard's frame detection method instead of GetMouseFoci
+    local frames = GetFramesUsingBlizzardMethod()
+      -- Additional safety filter to ensure no overlay frames slip through
+    if frames then
+        local safeFrames = {}
+        for _, frame in ipairs(frames) do
+            if frame and not IsOurOverlayFrame(frame) then
+                table.insert(safeFrames, frame)
             end
-            overlay:Show()
         end
+        frames = safeFrames
     end
-
-    -- Get information for the top frame (for tooltip)
-    local topFrame = frames[1]
-    local frameInfo = GetFrameInfo(topFrame)
-    local frameStack = GetFrameStack(topFrame)
-    local formattedLayers = GetFormattedFrameLayers(frames)
-
-    -- Update tooltip
-    CreateTooltip() -- Ensure tooltip exists
-    if not tooltip then
+    
+    if not frames or #frames == 0 or (frames[1] and frames[1] == WorldFrame) then
+        -- Only hide if we were previously showing something
+        if #currentlyHighlightedFrames > 0 then
+            for i = 1, #overlayFrames do
+                overlayFrames[i]:Hide()
+            end
+            if tooltip then
+                tooltip:Hide()
+            end
+            -- Hide Blizzard's frame stack highlight
+            if FrameStackHighlight then
+                FrameStackHighlight:Hide()
+            end
+            currentlyHighlightedFrames = {}
+            currentTooltipFrame = nil
+        end
         return
     end
 
-    tooltip:ClearAllPoints()
-    local x, y = GetCursorPosition()
-    local scale = UIParent:GetEffectiveScale()
-    tooltip:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", (x / scale) + 15, (y / scale) + 15)
-
-    -- Enhanced tooltip text with more detailed information
-    local tooltipText = "|cffffff00Frame Inspector v0.2|r\n\n"
-    tooltipText = tooltipText .. "|cffff8000Layers Found: " .. #frames .. "|r\n\n"
-    tooltipText = tooltipText .. "|cffff0000[TOP LAYER]|r\n"
-    tooltipText = tooltipText .. "|cff00ff00Name:|r " .. (frameInfo.name or "Unknown") .. "\n"
-    tooltipText = tooltipText .. "|cff00ff00Type:|r " .. (frameInfo.type or "Unknown") .. "\n"
-    tooltipText =
-        tooltipText .. "|cff00ff00Size:|r " .. (frameInfo.width or 0) .. " x " .. (frameInfo.height or 0) .. "\n"
-
-    -- Add enhanced frame properties
-    if frameInfo.level then
-        tooltipText = tooltipText .. "|cff00ff00Level:|r " .. frameInfo.level .. "\n"
-    end
-    if frameInfo.strata then
-        tooltipText = tooltipText .. "|cff00ff00Strata:|r " .. frameInfo.strata .. "\n"
-    end
-    if frameInfo.alpha then
-        tooltipText = tooltipText .. "|cff00ff00Alpha:|r " .. string.format("%.2f", frameInfo.alpha) .. "\n"
-    end
-    if frameInfo.scale then
-        tooltipText = tooltipText .. "|cff00ff00Scale:|r " .. string.format("%.2f", frameInfo.scale) .. "\n"
+    -- Check if the frame stack has actually changed
+    local framesChanged = false
+    if #frames ~= #currentlyHighlightedFrames then
+        framesChanged = true
+    else
+        for i = 1, #frames do
+            if frames[i] ~= currentlyHighlightedFrames[i] then
+                framesChanged = true
+                break
+            end
+        end
     end
 
-    -- State information
-    local stateInfo = {}
-    if frameInfo.visible ~= nil then
-        table.insert(stateInfo, frameInfo.visible and "|cff00ff00Visible|r" or "|cffff0000Hidden|r")
+    -- Only update overlays if the frame stack has changed
+    if framesChanged then        -- Hide overlays that are no longer needed
+        local layersToShow = math.min(#frames, maxLayers)
+        for i = layersToShow + 1, #overlayFrames do
+            if overlayFrames[i]:IsShown() then
+                overlayFrames[i]:Hide()
+            end
+        end
+        
+        -- Update overlays for current frames
+        for i = 1, layersToShow do
+            local frame = frames[i]
+            local overlay = overlayFrames[i]
+
+            if frame and overlay and frame ~= overlay and not IsOurOverlayFrame(frame) then
+                -- Only update if the frame has changed for this layer
+                if currentlyHighlightedFrames[i] ~= frame then
+                    overlay:ClearAllPoints()
+                    overlay:SetAllPoints(frame)
+                    
+                    -- Highlight anchor points for the top frame
+                    if i == 1 then
+                        HighlightAnchors(overlay, frame)
+                    end
+                end
+                
+                if not overlay:IsShown() then
+                    overlay:Show()
+                end
+            elseif overlay and overlay:IsShown() then
+                -- Hide overlay if frame is invalid/our own frame
+                overlay:Hide()
+            end
+        end        -- Update the tracking table
+        currentlyHighlightedFrames = {}
+        for i = 1, #frames do
+            currentlyHighlightedFrames[i] = frames[i]
+        end
     end
-    if frameInfo.mouseEnabled ~= nil then
-        table.insert(stateInfo, frameInfo.mouseEnabled and "|cff00ff00Mouse|r" or "|cff808080NoMouse|r")
-    end
-    if frameInfo.enabled ~= nil then
-        table.insert(stateInfo, frameInfo.enabled and "|cff00ff00Enabled|r" or "|cffff0000Disabled|r")
-    end
-    if #stateInfo > 0 then
-        tooltipText = tooltipText .. "|cff00ff00State:|r " .. table.concat(stateInfo, " ") .. "\n"
+    
+    -- Use Blizzard's frame highlighting system for the top frame (only if frame changed)
+    local topFrame = frames[1]
+    if topFrame and framesChanged and FrameStackHighlight and FrameStackHighlight.HighlightFrame then
+        FrameStackHighlight:HighlightFrame(topFrame, true) -- show anchors = true
     end
 
-    -- Children and regions count
-    if frameInfo.childCount and frameInfo.childCount > 0 then
-        tooltipText = tooltipText .. "|cff00ff00Children:|r " .. frameInfo.childCount .. "\n"
-    end
-    if frameInfo.regionCount and frameInfo.regionCount > 0 then
-        tooltipText = tooltipText .. "|cff00ff00Regions:|r " .. frameInfo.regionCount .. "\n"
-    end
+    -- Update tooltip only if the top frame has changed or frames changed
+    if topFrame and (framesChanged or currentTooltipFrame ~= topFrame) then
+        local frameInfo = GetFrameInfo(topFrame)
+        local frameStack = GetFrameStack(topFrame)
+        local formattedLayers = GetFormattedFrameLayers(frames)
 
-    tooltipText = tooltipText .. "\n"
+        -- Update tooltip
+        CreateTooltip() -- Ensure tooltip exists
+        if not tooltip then
+            return
+        end
 
-    -- Add texture information
-    if topFrame then
+        tooltip:ClearAllPoints()
+        local x, y = GetCursorPosition()
+        local scale = UIParent:GetEffectiveScale()
+        tooltip:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", (x / scale) + 15, (y / scale) + 15)        -- Enhanced tooltip text with more detailed information
+        local detectionMethod = (FrameStackTooltip and FrameStackTooltip.SetFrameStack) and "Blizzard SetFrameStack" or "GetMouseFoci Fallback"
+        local tooltipText = "|cffffff00Frame Inspector v0.3 (" .. detectionMethod .. ")|r\n\n"
+        tooltipText = tooltipText .. "|cffff8000Layers Found: " .. #frames .. "|r\n\n"
+        tooltipText = tooltipText .. "|cffff0000[TOP LAYER]|r\n"
+        tooltipText = tooltipText .. "|cff00ff00Name:|r " .. (frameInfo.name or "Unknown") .. "\n"
+        tooltipText = tooltipText .. "|cff00ff00Type:|r " .. (frameInfo.type or "Unknown") .. "\n"
+        tooltipText =
+            tooltipText .. "|cff00ff00Size:|r " .. (frameInfo.width or 0) .. " x " .. (frameInfo.height or 0) .. "\n"
+
+        -- Add enhanced frame properties
+        if frameInfo.level then
+            tooltipText = tooltipText .. "|cff00ff00Level:|r " .. frameInfo.level .. "\n"
+        end
+        if frameInfo.strata then
+            tooltipText = tooltipText .. "|cff00ff00Strata:|r " .. frameInfo.strata .. "\n"
+        end
+        if frameInfo.alpha then
+            tooltipText = tooltipText .. "|cff00ff00Alpha:|r " .. string.format("%.2f", frameInfo.alpha) .. "\n"
+        end
+        if frameInfo.scale then
+            tooltipText = tooltipText .. "|cff00ff00Scale:|r " .. string.format("%.2f", frameInfo.scale) .. "\n"
+        end
+
+        -- State information
+        local stateInfo = {}
+        if frameInfo.visible ~= nil then
+            table.insert(stateInfo, frameInfo.visible and "|cff00ff00Visible|r" or "|cffff0000Hidden|r")
+        end
+        if frameInfo.mouseEnabled ~= nil then
+            table.insert(stateInfo, frameInfo.mouseEnabled and "|cff00ff00Mouse|r" or "|cff808080NoMouse|r")
+        end
+        if frameInfo.enabled ~= nil then
+            table.insert(stateInfo, frameInfo.enabled and "|cff00ff00Enabled|r" or "|cffff0000Disabled|r")
+        end
+        if #stateInfo > 0 then
+            tooltipText = tooltipText .. "|cff00ff00State:|r " .. table.concat(stateInfo, " ") .. "\n"
+        end
+
+        -- Children and regions count
+        if frameInfo.childCount and frameInfo.childCount > 0 then
+            tooltipText = tooltipText .. "|cff00ff00Children:|r " .. frameInfo.childCount .. "\n"
+        end
+        if frameInfo.regionCount and frameInfo.regionCount > 0 then
+            tooltipText = tooltipText .. "|cff00ff00Regions:|r " .. frameInfo.regionCount .. "\n"
+        end
+
+        tooltipText = tooltipText .. "\n"
+
+        -- Add texture information
         local textureInfo = GetTextureInfoForFrame(topFrame)
         if textureInfo then
             tooltipText = tooltipText .. "|cff80ff80Textures:|r\n" .. textureInfo .. "\n\n"
         end
-    end
 
-    -- Add anchor information
-    local anchorInfo = GetAnchorInfo(topFrame)
-    if anchorInfo ~= "" then
-        tooltipText = tooltipText .. "|cff80ff80Anchors:|r\n" .. anchorInfo .. "\n\n"
-    end
+        -- Add anchor information
+        local anchorInfo = GetAnchorInfo(topFrame)
+        if anchorInfo ~= "" then
+            tooltipText = tooltipText .. "|cff80ff80Anchors:|r\n" .. anchorInfo .. "\n\n"
+        end
 
-    -- Add information about other visible layers
-    if #formattedLayers > 0 then
-        tooltipText = tooltipText .. "|cff80ff80Other Layers:|r\n"
-        tooltipText = tooltipText .. table.concat(formattedLayers, "\n") .. "\n\n"
-    end
+        -- Add information about other visible layers
+        if #formattedLayers > 0 then
+            tooltipText = tooltipText .. "|cff80ff80Other Layers:|r\n"
+            tooltipText = tooltipText .. table.concat(formattedLayers, "\n") .. "\n\n"
+        end
 
-    tooltipText = tooltipText .. "|cff80ff80Frame Hierarchy:|r\n"
+        tooltipText = tooltipText .. "|cff80ff80Frame Hierarchy:|r\n"
 
-    -- Add frame stack with our enhanced formatting
-    local stackLines = {strsplit("\n", frameStack)}
-    for _, line in ipairs(stackLines) do
-        tooltipText = tooltipText .. line .. "\n"
-    end
-    if tooltip and tooltip.text then
-        tooltip.text:SetText(tooltipText)
-        tooltip:Show()
+        -- Add frame stack with our enhanced formatting
+        local stackLines = {strsplit("\n", frameStack)}
+        for _, line in ipairs(stackLines) do
+            tooltipText = tooltipText .. line .. "\n"
+        end
+        if tooltip and tooltip.text then
+            tooltip.text:SetText(tooltipText)
+            tooltip:Show()
+        end
+        
+        -- Track the current tooltip frame
+        currentTooltipFrame = topFrame
+    elseif topFrame then
+        -- Just update tooltip position if frame hasn't changed
+        if tooltip then
+            tooltip:ClearAllPoints()
+            local x, y = GetCursorPosition()
+            local scale = UIParent:GetEffectiveScale()
+            tooltip:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", (x / scale) + 15, (y / scale) + 15)
+        end
     end
 end
 
@@ -799,6 +952,9 @@ local function DeactivateInspector()
 
     -- Stop update timer
     FrameInspector:SetScript("OnUpdate", nil)
+      -- Reset tracking state
+    currentlyHighlightedFrames = {}
+    currentTooltipFrame = nil
 
     -- Hide all overlays
     for i = 1, #overlayFrames do
