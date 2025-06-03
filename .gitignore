@@ -1,0 +1,61 @@
+# World of Warcraft addon .gitignore
+
+# Temporary files
+*.tmp
+*.temp
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE/Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Backup files
+*.bak
+*.backup
+*.orig
+
+# Log files
+*.log
+
+# WoW addon specific
+# Saved variables (these are user-specific)
+*.lua.bak
+
+# Build/distribution files
+*.zip
+*.7z
+*.tar.gz
+release/
+dist/
+
+# Node modules (if using any build tools)
+node_modules/
+
+# Python cache (if using any Python tools)
+__pycache__/
+*.pyc
+*.pyo
+
+# Git merge conflict files
+*.orig
+*.rej
+
+# Testing/development files
+test/
+tests/
+dev/
+
+Blizzard_FrameStack
+Blizzard_DebugTools
