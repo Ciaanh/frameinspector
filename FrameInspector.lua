@@ -20,6 +20,7 @@ local overlays = {}
 local isActive = false
 local lastStack = {}
 local tooltip = nil
+local showTextureInfo = false -- Toggle for texture information display
 
 -- Utility functions
 local function SafeHide(frame)
@@ -131,7 +132,102 @@ local function CreateTooltip()
     tooltip.text:SetWordWrap(true)
 end
 
--- Get anchor information for a frame
+-- Get texture information for a frame/region
+local function GetTextureInfo(region)
+    if not region or not CanAccessObject or not CanAccessObject(region) then
+        return nil
+    end
+
+    -- Check if this region has texture methods
+    if region.GetTexture then
+        local texture = region:GetTexture()
+        if texture then
+            local coords = ""
+            if region.GetTexCoord then
+                local ulx, uly, llx, lly, urx, ury, lrx, lry = region:GetTexCoord()
+                if ulx and uly and llx and lly and urx and ury and lrx and lry then
+                    -- Check if coordinates are not default (0,0,0,1,1,0,1,1)
+                    if
+                        not (ulx == 0 and uly == 0 and llx == 0 and lly == 1 and urx == 1 and ury == 0 and lrx == 1 and
+                            lry == 1)
+                     then
+                        coords =
+                            string.format(
+                            " |cff00ffffCoords: UL:(%.2f,%.2f), LL:(%.2f,%.2f), UR:(%.2f,%.2f), LR:(%.2f,%.2f)|r",
+                            ulx,
+                            uly,
+                            llx,
+                            lly,
+                            urx,
+                            ury,
+                            lrx,
+                            lry
+                        )
+                    end
+                end
+            end
+
+            -- Try to determine if it's an atlas or file
+            local assetType = "File"
+            local assetName = tostring(texture)
+
+            -- Basic heuristic: if texture name doesn't contain a path separator, it might be an atlas
+            if assetName and not assetName:find("[/\\]") and not assetName:find("%.") then
+                assetType = "Atlas"
+            end
+
+            return string.format(
+                "|cff%sTexture: %s|r%s",
+                assetType == "Atlas" and "00ff00" or "ff0000",
+                assetName,
+                coords
+            ), {assetName, assetType}
+        end
+    end
+
+    return nil
+end
+
+-- Get texture information for frame and its regions
+local function GetFrameTextureInfo(frame)
+    if not frame then
+        return nil, nil
+    end
+
+    local textureInfoLines = {}
+    local assets = {}
+
+    -- Check the frame itself if it's a texture
+    local frameTexInfo, frameAsset = GetTextureInfo(frame)
+    if frameTexInfo then
+        table.insert(textureInfoLines, string.format("%s: %s", GetFrameDisplayName(frame), frameTexInfo))
+        if frameAsset then
+            table.insert(assets, frameAsset)
+        end
+    end
+
+    -- Check regions if frame has GetRegions method
+    if frame.GetRegions then
+        local regions = {frame:GetRegions()}
+        for i, region in ipairs(regions) do
+            if region:IsMouseOver() then
+                local regionTexInfo, regionAsset = GetTextureInfo(region)
+                if regionTexInfo then
+                    table.insert(textureInfoLines, string.format("%s: %s", GetFrameDisplayName(region), regionTexInfo))
+                    if regionAsset then
+                        table.insert(assets, regionAsset)
+                    end
+                end
+            end
+        end
+    end
+
+    if #textureInfoLines > 0 then
+        return table.concat(textureInfoLines, "\n"), assets
+    end
+
+    return nil, nil
+end
 local function GetFrameAnchorInfo(frame)
     if not frame then
         return nil
@@ -154,7 +250,7 @@ local function GetFrameAnchorInfo(frame)
 end
 
 -- Format frame information for tooltip
-local function GetFrameInfo(frame)
+local function GetFrameInfo(frame, textureInfo)
     if not frame then
         return "No frame"
     end
@@ -193,13 +289,17 @@ local function GetFrameInfo(frame)
     local isVisible = frame:IsVisible()
     local isShown = frame:IsShown()
     table.insert(info, "|cffffd700Visible:|r " .. (isVisible and "|cff00ff00Yes|r" or "|cffff0000No|r"))
-    table.insert(info, "|cffffd700Shown:|r " .. (isShown and "|cff00ff00Yes|r" or "|cffff0000No|r")) -- Parent frame
+    table.insert(info, "|cffffd700Shown:|r " .. (isShown and "|cff00ff00Yes|r" or "|cffff0000No|r"))
+
+    -- Parent frame
     local parent = frame:GetParent()
     local parentName = parent and GetFrameDisplayName(parent)
-    table.insert(info, "|cffffd700Parent:|r " .. (parentName or "|cffff0000<Anonymous/None>|r")) -- Anchor information
+    table.insert(info, "|cffffd700Parent:|r " .. (parentName or "|cffff0000<Anonymous/None>|r"))
+
+    -- Anchor information
     local anchorInfo = GetFrameAnchorInfo(frame)
     if anchorInfo then
-        local relativeToName = GetFrameDisplayName(anchorInfo.relativeFrame) -- Changed from relativeTo to relativeFrame
+        local relativeToName = GetFrameDisplayName(anchorInfo.relativeFrame)
         table.insert(info, "|cffffd700Anchor:|r " .. anchorInfo.point)
         table.insert(info, "|cffffd700Relative To:|r " .. relativeToName)
         table.insert(info, "|cffffd700Relative Point:|r " .. (anchorInfo.relativePoint or "UNKNOWN"))
@@ -211,16 +311,25 @@ local function GetFrameInfo(frame)
         table.insert(info, "|cffffd700Anchor:|r |cffff0000No anchor points|r")
     end
 
+    -- Add texture information if available
+    if textureInfo then
+        table.insert(info, "\n|cffffd700Texture Information:|r")
+        table.insert(info, textureInfo)
+    end
+
     return table.concat(info, "\n")
 end
 
 -- Update tooltip with frame information
-local function UpdateTooltip(frame)
+local function UpdateTooltip(frame, assets)
     if not tooltip or not frame then
         return
     end
 
-    local frameInfo = GetFrameInfo(frame)
+    -- Get texture information if enabled
+    local textureInfo, textureAssets = GetFrameTextureInfo(frame)
+
+    local frameInfo = GetFrameInfo(frame, textureInfo)
 
     -- Create the display text with title
     local displayText = "|cff00ff00Frame Inspector Details|r\n\n" .. frameInfo
@@ -270,6 +379,9 @@ local function UpdateTooltip(frame)
 
     tooltip:ClearAllPoints()
     tooltip:SetPoint(anchorPoint, UIParent, "BOTTOMLEFT", x + offsetX, y + offsetY)
+
+    -- Store assets for clipboard functionality
+    tooltip.currentAssets = textureAssets or assets
 end
 
 -- Create overlays (Blizzard-style)
@@ -415,6 +527,7 @@ local function GetFrameStack()
     local current = highlightFrame
     local depth = 0
 
+    -- Build the complete frame stack
     while current and depth < MAX_LAYERS do
         -- Since overlays are hidden during detection, we shouldn't encounter them
         if not IsOurOverlay(current) then
@@ -435,7 +548,6 @@ local function GetFrameStack()
             break
         end
     end
-
     return stack
 end
 
@@ -459,7 +571,9 @@ local function Update()
                 break
             end
         end
-    end -- Always update overlays to ensure they're shown after being hidden during frame detection
+    end
+
+    -- Always update overlays to ensure they're shown after being hidden during frame detection
     for i = 1, MAX_LAYERS do
         local overlay = overlays[i]
         if i <= n and stack[i] and not IsOurOverlay(stack[i]) then
@@ -469,16 +583,16 @@ local function Update()
                 overlay:SetAllPoints(stack[i])
             end
 
-            -- Always update anchor indicator for top overlay so it follows cursor
+            -- Show overlay for all frames in stack
+            SafeShow(overlay)
+
+            -- Only show anchor indicator for the top frame (first in stack)
             if i == 1 then
                 local anchorInfo = GetFrameAnchorInfo(stack[i])
                 CreateAnchorIndicator(overlay, stack[i], anchorInfo)
             else
-                -- Hide anchor indicators for non-top overlays
                 CreateAnchorIndicator(overlay, nil, nil)
             end
-
-            SafeShow(overlay)
         else
             SafeHide(overlay)
             -- Hide anchor indicators when overlay is hidden
@@ -494,7 +608,7 @@ local function Update()
         end
     end
 
-    -- Update tooltip with top frame information
+    -- Update tooltip with top frame information (first in stack)
     if stack[1] then
         UpdateTooltip(stack[1])
     else
@@ -531,6 +645,7 @@ local function Deactivate()
     lastStack = {} -- Clear cached stack to avoid stale data
     if tooltip then
         SafeHide(tooltip)
+        tooltip.currentAssets = nil -- Clear stored assets
     end
 end
 
@@ -542,6 +657,36 @@ local function Toggle()
     end
 end
 
+-- Simple slash command handler
+local function SlashHandler(msg)
+    Toggle()
+end
+
 -- Register chat command
 SLASH_FRAMEINSPECTOR1 = "/fi"
-SlashCmdList["FRAMEINSPECTOR"] = Toggle
+SlashCmdList["FRAMEINSPECTOR"] = SlashHandler
+
+-- Welcome message
+print("|cff00ff00FrameInspector loaded!|r Type |cffffd700/fi|r to toggle.")
+
+-- Set up simple key binding for Ctrl+` (Ctrl+Grave)
+-- This matches Blizzard's standard frame stack inspector keybind
+local keyFrame = CreateFrame("Frame", "FrameInspectorKeyHandler")
+keyFrame:SetPropagateKeyboardInput(true)
+keyFrame:SetScript(
+    "OnKeyDown",
+    function(self, key)
+        -- Check for Ctrl+` (grave accent key) - toggle inspector
+        if key == "GRAVE" and IsControlKeyDown() and not IsAltKeyDown() and not IsShiftKeyDown() then
+            Toggle()
+            self:SetPropagateKeyboardInput(false) -- Consume the key event
+        else
+            self:SetPropagateKeyboardInput(true) -- Let other addons handle it
+        end
+    end
+)
+
+-- Enable keyboard input
+keyFrame:EnableKeyboard(true)
+keyFrame:SetFrameStrata("TOOLTIP")
+keyFrame:SetFrameLevel(10001) -- Higher than our overlays
