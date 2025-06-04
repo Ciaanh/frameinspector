@@ -9,6 +9,30 @@ local isActive = false
 local lastStack = {}
 local tooltip = nil
 
+local function HideFrame(frame, caller)
+    if frame and frame:IsShown() then
+        -- local frameName = frame:GetName() or "<Anonymous>"
+        -- local callerInfo = caller or "Unknown"
+        -- print(
+        --     "|cffff9900[FrameInspector]|r HideFrame called from: |cff00ffff" ..
+        --         callerInfo .. "|r - Hiding frame: |cffff0000" .. frameName .. "|r"
+        -- )
+        frame:Hide()
+    end
+end
+
+local function ShowFrame(frame, caller)
+    if frame and not frame:IsShown() then
+        -- local frameName = frame:GetName() or "<Anonymous>"
+        -- local callerInfo = caller or "Unknown"
+        -- print(
+        --     "|cffff9900[FrameInspector]|r ShowFrame called from: |cff00ffff" ..
+        --         callerInfo .. "|r - Showing frame: |cff00ff00" .. frameName .. "|r"
+        -- )
+        frame:Show()
+    end
+end
+
 -- Create tooltip for frame details
 local function CreateTooltip()
     if tooltip then
@@ -21,7 +45,7 @@ local function CreateTooltip()
     tooltip:SetFrameLevel(10000)
     tooltip:SetClampedToScreen(true)
     tooltip:SetSize(300, 200)
-    tooltip:Hide()
+    HideFrame(tooltip, "CreateTooltip")
 
     -- Create background
     tooltip.bg = tooltip:CreateTexture(nil, "BACKGROUND")
@@ -43,51 +67,22 @@ local function CreateTooltip()
     tooltip.text:SetJustifyV("TOP")
     tooltip.text:SetWordWrap(true)
 
-    -- Make tooltip moveable
-    tooltip:SetMovable(true)
-    tooltip:EnableMouse(true)
-    tooltip:RegisterForDrag("LeftButton")
-    tooltip:SetScript(
-        "OnDragStart",
-        function(self)
-            self:StartMoving()
-        end
-    )
-    tooltip:SetScript(
-        "OnDragStop",
-        function(self)
-            self:StopMovingOrSizing()
-        end
-    )
-
-    -- Add a close button (simple X)
-    local closeButton = CreateFrame("Button", nil, tooltip)
-    closeButton:SetSize(16, 16)
-    closeButton:SetPoint("TOPRIGHT", tooltip, "TOPRIGHT", -2, -2)
-
-    closeButton.text = closeButton:CreateFontString(nil, "ARTWORK", "GameFontNormal")
-    closeButton.text:SetAllPoints()
-    closeButton.text:SetText("X")
-    closeButton.text:SetTextColor(1, 0.2, 0.2)
-
-    closeButton:SetScript(
-        "OnClick",
-        function()
-            tooltip:Hide()
-        end
-    )
-    closeButton:SetScript(
-        "OnEnter",
-        function(self)
-            self.text:SetTextColor(1, 0.5, 0.5)
-        end
-    )
-    closeButton:SetScript(
-        "OnLeave",
-        function(self)
-            self.text:SetTextColor(1, 0.2, 0.2)
-        end
-    )
+    -- -- Make tooltip moveable
+    -- tooltip:SetMovable(true)
+    -- tooltip:EnableMouse(true)
+    -- tooltip:RegisterForDrag("LeftButton")
+    -- tooltip:SetScript(
+    --     "OnDragStart",
+    --     function(self)
+    --         self:StartMoving()
+    --     end
+    -- )
+    -- tooltip:SetScript(
+    --     "OnDragStop",
+    --     function(self)
+    --         self:StopMovingOrSizing()
+    --     end
+    -- )
 end
 
 -- Format frame information for tooltip
@@ -160,9 +155,8 @@ local function UpdateTooltip(frame)
 
     local tooltipWidth = math.max(300, textWidth + 16)
     local tooltipHeight = math.max(100, textHeight + 16)
-
     tooltip:SetSize(tooltipWidth, tooltipHeight)
-    tooltip:Show()
+    ShowFrame(tooltip, "UpdateTooltip")
 
     -- Position tooltip away from mouse cursor to prevent interference
     local scale = tooltip:GetEffectiveScale()
@@ -215,7 +209,8 @@ local function CreateOverlays()
         local overlay = CreateFrame("Frame", "FrameInspectorOverlay" .. i, UIParent)
         overlay:SetFrameStrata("TOOLTIP")
         overlay:SetFrameLevel(9999 - i)
-        overlay:Hide()
+        HideFrame(overlay, "CreateOverlays")
+
         overlay.bg = overlay:CreateTexture(nil, "ARTWORK")
         overlay.bg:SetAllPoints()
         overlay.bg:SetColorTexture(unpack(colors[i]))
@@ -235,28 +230,136 @@ local function IsOurOverlay(frame)
     return false
 end
 
--- Get frame stack (Blizzard-style, top to parent)
 local function GetFrameStack()
-    if FrameStackTooltip and FrameStackTooltip.SetFrameStack then
-        local highlightFrame = FrameStackTooltip:SetFrameStack(false, false)
-        local stack = {}
-        local current = highlightFrame
-        local depth = 0
-        while current and depth < maxLayers do
-            -- Skip our own overlay frames to prevent self-anchoring
-            if not IsOurOverlay(current) then
-                table.insert(stack, current)
-            end
-            local parent = current:GetParent()
-            if not parent or parent == UIParent or parent == current then
-                break
-            end
-            current = parent
-            depth = depth + 1
+    -- Hide overlays temporarily during frame detection to prevent self-detection
+    for i = 1, #overlays do
+        if overlays[i] and overlays[i]:IsShown() then
+            HideFrame(overlays[i], "GetFrameStack3-TempHide")
         end
-        return stack
     end
-    return {}
+
+    -- Case 1: Check if FrameStackTooltip dependencies are available
+    if not FrameStackTooltip then
+        print(
+            "|cffff9900[FrameInspector]|r |cffff0000Empty Stack Case 1:|r FrameStackTooltip global not found (Blizzard_FrameStack addon not loaded)"
+        )
+        return {}
+    end
+
+    if not FrameStackTooltip.SetFrameStack then
+        print(
+            "|cffff9900[FrameInspector]|r |cffff0000Empty Stack Case 1:|r SetFrameStack method missing on FrameStackTooltip"
+        )
+        return {}
+    end
+
+    -- Get the highlighted frame from Blizzard's system (overlays are hidden, so won't interfere)
+    local highlightFrame = FrameStackTooltip:SetFrameStack(false, false)
+
+    -- Case 2: No frame under mouse cursor
+    if not highlightFrame then
+        print(
+            "|cffff9900[FrameInspector]|r |cffff0000Empty Stack Case 2:|r No frame under mouse cursor (empty space or game world)"
+        )
+        return {}
+    end
+
+    local stack = {}
+    local current = highlightFrame
+    local depth = 0
+    local totalFramesProcessed = 0
+    local overlayFramesSkipped = 0
+
+    print(
+        "|cffff9900[FrameInspector]|r |cff00ffccGetFrameStack Debug:|r Starting with highlightFrame: " ..
+            (highlightFrame:GetName() or "<Anonymous>")
+    )
+    while current and depth < maxLayers do
+        totalFramesProcessed = totalFramesProcessed + 1
+        local frameName = current:GetName() or "<Anonymous>"
+
+        -- Since overlays are hidden during detection, we shouldn't encounter them
+        -- But keep the check as a safety measure
+        if IsOurOverlay(current) then
+            overlayFramesSkipped = overlayFramesSkipped + 1
+            print(
+                "|cffff9900[FrameInspector]|r |cffff6600Frame Filtered:|r Unexpected overlay frame detected: " ..
+                    frameName
+            )
+        else
+            table.insert(stack, current)
+            print(
+                "|cffff9900[FrameInspector]|r |cff00ff00Frame Added:|r [" ..
+                    #stack .. "] " .. frameName .. " (Type: " .. (current:GetObjectType() or "Unknown") .. ")"
+            )
+        end
+
+        -- Check parent chain
+        local parent = current:GetParent()
+        if not parent then
+            print(
+                "|cffff9900[FrameInspector]|r |cff888888Parent Chain End:|r Frame '" .. frameName .. "' has no parent"
+            )
+            break
+        elseif parent == UIParent then
+            print(
+                "|cffff9900[FrameInspector]|r |cff888888Parent Chain End:|r Frame '" ..
+                    frameName .. "' parent is UIParent"
+            )
+            break
+        elseif parent == current then
+            print(
+                "|cffff9900[FrameInspector]|r |cffff0000Parent Chain Error:|r Frame '" ..
+                    frameName .. "' has self-referencing parent"
+            )
+            break
+        else
+            local parentName = parent:GetName() or "<Anonymous>"
+            print("|cffff9900[FrameInspector]|r |cff00ccffParent Chain:|r " .. frameName .. " -> " .. parentName)
+        end
+
+        current = parent
+        depth = depth + 1
+
+        -- Case 5: Maximum depth reached
+        if depth >= maxLayers then
+            print(
+                "|cffff9900[FrameInspector]|r |cffff6600Depth Limit:|r Reached maximum depth (" ..
+                    maxLayers .. "), stopping traversal"
+            )
+            break
+        end
+    end
+
+    -- Final analysis and logging
+    print(
+        "|cffff9900[FrameInspector]|r |cff00ffccGetFrameStack Summary:|r Processed " ..
+            totalFramesProcessed ..
+                " frames, skipped " .. overlayFramesSkipped .. " overlays, final stack size: " .. #stack
+    )
+
+    -- Case 3 & 4: All frames filtered out or immediate termination
+    if #stack == 0 then
+        if overlayFramesSkipped > 0 then
+            print(
+                "|cffff9900[FrameInspector]|r |cffff0000Empty Stack Case 3:|r All " ..
+                    overlayFramesSkipped .. " frames were our overlay frames (filtered out)"
+            )
+        elseif totalFramesProcessed == 1 then
+            print(
+                "|cffff9900[FrameInspector]|r |cffff0000Empty Stack Case 4:|r Initial frame had immediate parent chain termination"
+            )
+        else
+            print(
+                "|cffff9900[FrameInspector]|r |cffff0000Empty Stack Case 4:|r Parent chain terminated without valid frames"
+            )
+        end
+    end
+
+    -- Note: Overlays will be re-shown by the Update() function after this returns
+    -- This prevents them from interfering with frame detection while still allowing proper display
+
+    return stack
 end
 
 -- Update overlays every frame
@@ -269,34 +372,60 @@ local function Update()
 
     -- Check if stack has changed to reduce flickering
     local stackChanged = false
+
+    -- Log stack size comparison
+    -- print("|cffff9900[FrameInspector]|r Stack check: lastStack=#" .. #lastStack .. ", current=#" .. n)
+
     if #lastStack ~= n then
         stackChanged = true
+        print(
+            "|cffff9900[FrameInspector]|r |cffff0000Stack changed:|r Different sizes (" ..
+                #lastStack .. " -> " .. n .. ")"
+        )
     else
+        -- if not stackChanged then
+        --     print("|cffff9900[FrameInspector]|r |cff00ff00Stack unchanged:|r All " .. n .. " frames are identical")
+        -- end
         for i = 1, n do
             if lastStack[i] ~= stack[i] then
+                -- local lastFrameName = lastStack[i] and (lastStack[i]:GetName() or "<Anonymous>") or "nil"
+                -- local currentFrameName = stack[i] and (stack[i]:GetName() or "<Anonymous>") or "nil"
+                -- print(
+                --     "|cffff9900[FrameInspector]|r |cffff0000Stack changed:|r Frame at position " ..
+                --         i .. " changed from '" .. lastFrameName .. "' to '" .. currentFrameName .. "'"
+                -- )
                 stackChanged = true
                 break
             end
         end
-    end
-
-    if stackChanged then
-        for i = 1, maxLayers do
-            local overlay = overlays[i]
-            if i <= n and stack[i] and not IsOurOverlay(stack[i]) then
+    end    -- Always update overlays to ensure they're shown after being hidden during frame detection
+    -- Only update lastStack when the stack actually changed for performance optimization
+    for i = 1, maxLayers do
+        local overlay = overlays[i]
+        if i <= n and stack[i] and not IsOurOverlay(stack[i]) then
+            local frameName = stack[i]:GetName() or "<Anonymous>"
+            -- Only reposition if stack changed (performance optimization)
+            if stackChanged then
                 overlay:ClearAllPoints()
                 overlay:SetAllPoints(stack[i])
-                overlay:Show()
-            else
-                overlay:Hide()
             end
+            ShowFrame(overlay, "Update")
+        else
+            HideFrame(overlay, "Update")
         end
+    end
 
-        -- Update lastStack
+    -- Update lastStack only when stack changed (performance optimization)
+    if stackChanged then
         lastStack = {}
         for i = 1, n do
             lastStack[i] = stack[i]
         end
+        -- print("|cffff9900[FrameInspector]|r |cff00ff00Cache updated:|r lastStack now contains " .. n .. " frames")
+    -- else
+    --     print(
+    --         "|cffff9900[FrameInspector]|r |cff888888Keeping overlay visibility:|r Stack unchanged, but ensuring overlays are visible"
+    --     )
     end
 
     -- Update tooltip with top frame information
@@ -304,7 +433,7 @@ local function Update()
         UpdateTooltip(stack[1])
     else
         if tooltip then
-            tooltip:Hide()
+            HideFrame(tooltip, "Update")
         end
     end
 end
@@ -315,20 +444,20 @@ local function Activate()
     CreateOverlays()
     CreateTooltip()
     FrameInspector:SetScript("OnUpdate", Update)
-    print("|cff00ff00FrameInspector activated!|r Hover over frames to inspect them.")
+    -- print("|cff00ff00FrameInspector activated!|r Hover over frames to inspect them.")
 end
 
 local function Deactivate()
     isActive = false
     FrameInspector:SetScript("OnUpdate", nil)
     for i = 1, #overlays do
-        overlays[i]:Hide()
+        HideFrame(overlays[i], "Deactivate")
     end
     lastStack = {} -- Clear cached stack to avoid stale data
     if tooltip then
-        tooltip:Hide()
+        HideFrame(tooltip, "Deactivate")
     end
-    print("|cffff0000FrameInspector deactivated!|r")
+    -- print("|cffff0000FrameInspector deactivated!|r")
 end
 
 local function Toggle()
