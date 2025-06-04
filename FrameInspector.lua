@@ -7,6 +7,142 @@ local overlays = {}
 local maxLayers = 5
 local isActive = false
 local lastStack = {}
+local tooltip = nil
+
+-- Create tooltip for frame details
+local function CreateTooltip()
+    if tooltip then return end
+    
+    -- Create custom tooltip frame without template
+    tooltip = CreateFrame("Frame", "FrameInspectorTooltip", UIParent)
+    tooltip:SetFrameStrata("TOOLTIP")
+    tooltip:SetFrameLevel(10000)
+    tooltip:SetClampedToScreen(true)
+    tooltip:SetSize(300, 200)
+    tooltip:Hide()
+    
+    -- Create background
+    tooltip.bg = tooltip:CreateTexture(nil, "BACKGROUND")
+    tooltip.bg:SetAllPoints()
+    tooltip.bg:SetColorTexture(0, 0, 0, 0.9)
+    
+    -- Create border
+    tooltip.border = tooltip:CreateTexture(nil, "BORDER")
+    tooltip.border:SetAllPoints()
+    tooltip.border:SetColorTexture(1, 1, 1, 0.3)
+    tooltip.border:SetPoint("TOPLEFT", tooltip, "TOPLEFT", -1, 1)
+    tooltip.border:SetPoint("BOTTOMRIGHT", tooltip, "BOTTOMRIGHT", 1, -1)
+    
+    -- Create text display
+    tooltip.text = tooltip:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+    tooltip.text:SetPoint("TOPLEFT", tooltip, "TOPLEFT", 8, -8)
+    tooltip.text:SetPoint("BOTTOMRIGHT", tooltip, "BOTTOMRIGHT", -8, 8)
+    tooltip.text:SetJustifyH("LEFT")
+    tooltip.text:SetJustifyV("TOP")
+    tooltip.text:SetWordWrap(true)
+    
+    -- Make tooltip moveable
+    tooltip:SetMovable(true)
+    tooltip:EnableMouse(true)
+    tooltip:RegisterForDrag("LeftButton")
+    tooltip:SetScript("OnDragStart", function(self) self:StartMoving() end)
+    tooltip:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
+    
+    -- Add a close button (simple X)
+    local closeButton = CreateFrame("Button", nil, tooltip)
+    closeButton:SetSize(16, 16)
+    closeButton:SetPoint("TOPRIGHT", tooltip, "TOPRIGHT", -2, -2)
+    
+    closeButton.text = closeButton:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+    closeButton.text:SetAllPoints()
+    closeButton.text:SetText("X")
+    closeButton.text:SetTextColor(1, 0.2, 0.2)
+    
+    closeButton:SetScript("OnClick", function() tooltip:Hide() end)
+    closeButton:SetScript("OnEnter", function(self) self.text:SetTextColor(1, 0.5, 0.5) end)
+    closeButton:SetScript("OnLeave", function(self) self.text:SetTextColor(1, 0.2, 0.2) end)
+end
+
+-- Format frame information for tooltip
+local function GetFrameInfo(frame)
+    if not frame then return "No frame" end
+    
+    local info = {}
+    
+    -- Frame name
+    local name = frame:GetName()
+    table.insert(info, "|cffffd700Name:|r " .. (name or "|cffff0000<Anonymous>|r"))
+    
+    -- Frame type
+    local objectType = frame:GetObjectType()
+    table.insert(info, "|cffffd700Type:|r " .. (objectType or "Unknown"))
+    
+    -- Size information
+    local width = frame:GetWidth()
+    local height = frame:GetHeight()
+    table.insert(info, "|cffffd700Size:|r " .. string.format("%.1f x %.1f", width or 0, height or 0))
+    
+    -- Position information
+    local left = frame:GetLeft()
+    local bottom = frame:GetBottom()
+    if left and bottom then
+        table.insert(info, "|cffffd700Position:|r " .. string.format("%.1f, %.1f", left, bottom))
+    else
+        table.insert(info, "|cffffd700Position:|r |cffff0000Unknown|r")
+    end
+    
+    -- Frame strata and level
+    local strata = frame:GetFrameStrata()
+    local level = frame:GetFrameLevel()
+    table.insert(info, "|cffffd700Strata:|r " .. (strata or "Unknown"))
+    table.insert(info, "|cffffd700Level:|r " .. (level or "Unknown"))
+    
+    -- Visibility
+    local isVisible = frame:IsVisible()
+    local isShown = frame:IsShown()
+    table.insert(info, "|cffffd700Visible:|r " .. (isVisible and "|cff00ff00Yes|r" or "|cffff0000No|r"))
+    table.insert(info, "|cffffd700Shown:|r " .. (isShown and "|cff00ff00Yes|r" or "|cffff0000No|r"))
+    
+    -- Parent frame
+    local parent = frame:GetParent()
+    local parentName = parent and parent:GetName()
+    table.insert(info, "|cffffd700Parent:|r " .. (parentName or "|cffff0000<Anonymous/None>|r"))
+    
+    return table.concat(info, "\n")
+end
+
+-- Update tooltip with frame information
+local function UpdateTooltip(frame)
+    if not tooltip or not frame then return end
+    
+    local frameInfo = GetFrameInfo(frame)
+    
+    -- Create the display text with title
+    local displayText = "|cff00ff00Frame Inspector Details|r\n\n" .. frameInfo
+    
+    -- Set the text
+    tooltip.text:SetText(displayText)
+    
+    -- Auto-resize tooltip based on text
+    local textWidth = tooltip.text:GetStringWidth()
+    local textHeight = tooltip.text:GetStringHeight()
+    
+    local tooltipWidth = math.max(300, textWidth + 16)
+    local tooltipHeight = math.max(100, textHeight + 16)
+    
+    tooltip:SetSize(tooltipWidth, tooltipHeight)
+    
+    tooltip:Show()
+    
+    -- Position tooltip near mouse cursor
+    local scale = tooltip:GetEffectiveScale()
+    local x, y = GetCursorPosition()
+    x = x / scale
+    y = y / scale
+    
+    tooltip:ClearAllPoints()
+    tooltip:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", x + 10, y + 10)
+end
 
 -- Create overlays (Blizzard-style)
 local function CreateOverlays()
@@ -99,12 +235,20 @@ local function Update()
             lastStack[i] = stack[i]
         end
     end
+    
+    -- Update tooltip with top frame information
+    if stack[1] then
+        UpdateTooltip(stack[1])
+    else
+        if tooltip then tooltip:Hide() end
+    end
 end
 
 -- Activate/deactivate
 local function Activate()
     isActive = true
     CreateOverlays()
+    CreateTooltip()
     FrameInspector:SetScript("OnUpdate", Update)
     print("|cff00ff00FrameInspector activated!|r Hover over frames to inspect them.")
 end
@@ -114,6 +258,7 @@ local function Deactivate()
     FrameInspector:SetScript("OnUpdate", nil)
     for i = 1, #overlays do overlays[i]:Hide() end
     lastStack = {} -- Clear cached stack to avoid stale data
+    if tooltip then tooltip:Hide() end
     print("|cffff0000FrameInspector deactivated!|r")
 end
 
